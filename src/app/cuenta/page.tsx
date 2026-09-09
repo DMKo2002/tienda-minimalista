@@ -7,6 +7,10 @@ import LogoutButton from '@/components/cuenta/LogoutButton'
 import Navbar from '@/components/layout/Navbar'
 import Footer from '@/components/layout/Footer'
 
+// Pantalla privada de cuenta (requiere login) -- sin sentido indexarla,
+// no es contenido publico que alguien deba encontrar buscando en Google.
+export const metadata = { title: 'Mi Cuenta', robots: { index: false, follow: false } }
+
 function createServiceClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

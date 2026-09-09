@@ -20,7 +20,7 @@ interface Props {
   }
 }
 
-export const metadata = { title: 'Tienda' }
+export const metadata = { title: 'Tienda', alternates: { canonical: '/tienda' } }
 
 export default async function TiendaPage({ searchParams }: Props) {
   const supabase = await createServerSupabase()
