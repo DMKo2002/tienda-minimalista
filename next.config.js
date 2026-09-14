@@ -26,11 +26,14 @@ const nextConfig = {
     ]
   },
   images: {
-    // PRUEBA TEMPORAL (2026-09-14): unoptimized:true desactiva el resize/recompresion
-    // de next/image para medir impacto en calidad visual vs. costo de Image Optimization
-    // en Vercel (291k transformaciones/$17.50 en el ultimo billing). Si la calidad se
-    // sostiene bien, replicar en el resto de los templates + Panel Admin y sacar esta nota.
-    unoptimized: true,
+    // Optimizacion server-side activa (necesaria para que las miniaturas de 56-120px
+    // salgan nitidas -- sin esto el navegador escala el original y queda con ruido/moire).
+    // deviceSizes/imageSizes acotados a los anchos que realmente se usan en la tienda
+    // (ver sizes= en ProductCard/ProductGallery/CarritoPage/CheckoutPage de tienda-core)
+    // en vez de los 16 breakpoints por default de Next, para bajar la cantidad de
+    // transformaciones unicas que factura Vercel. 2026-09-14.
+    deviceSizes: [384, 640, 750, 1080, 1200, 1920],
+    imageSizes: [56, 96, 120, 160, 256],
     remotePatterns: [
       { protocol: 'https', hostname: '*.supabase.co', pathname: '/storage/v1/object/public/**' },
     ],
