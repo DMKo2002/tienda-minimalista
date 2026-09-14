@@ -26,6 +26,11 @@ const nextConfig = {
     ]
   },
   images: {
+    // PRUEBA TEMPORAL (2026-09-14): unoptimized:true desactiva el resize/recompresion
+    // de next/image para medir impacto en calidad visual vs. costo de Image Optimization
+    // en Vercel (291k transformaciones/$17.50 en el ultimo billing). Si la calidad se
+    // sostiene bien, replicar en el resto de los templates + Panel Admin y sacar esta nota.
+    unoptimized: true,
     remotePatterns: [
       { protocol: 'https', hostname: '*.supabase.co', pathname: '/storage/v1/object/public/**' },
     ],
