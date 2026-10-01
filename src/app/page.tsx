@@ -68,12 +68,19 @@ export default async function HomePage() {
         {/* ── HERO ─────────────────────────────────────────────── */}
         <section
           className="relative min-h-screen flex items-end pb-20 overflow-hidden bg-[#E3E0DA]"
-          style={(appearance as any)?.hero_image_url ? {
-            backgroundImage: `url(${(appearance as any).hero_image_url})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          } : undefined}
         >
+          {/* Imagen de fondo vía next/image (optimizada y cacheada por Vercel) */}
+          {(appearance as any)?.hero_image_url && (
+            <Image
+              src={(appearance as any).hero_image_url}
+              alt=""
+              fill
+              priority
+              quality={90}
+              sizes="100vw"
+              className="object-cover object-center"
+            />
+          )}
           {/* Overlay oscuro cuando hay imagen */}
           {(appearance as any)?.hero_image_url && (
             <div className="absolute inset-0 bg-black/40" />

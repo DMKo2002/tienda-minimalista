@@ -26,6 +26,8 @@ const nextConfig = {
     ]
   },
   images: {
+    // Next 16 solo permite los quality listados acá (default [75]); sin esto quality={90} se ignora.
+    qualities: [75, 90],
     // Optimizacion server-side activa (necesaria para que las miniaturas de 56-120px
     // salgan nitidas -- sin esto el navegador escala el original y queda con ruido/moire).
     // deviceSizes/imageSizes acotados a los anchos que realmente se usan en la tienda
