@@ -69,7 +69,9 @@ export default async function HomePage() {
         <section
           className="relative min-h-screen flex items-end pb-20 overflow-hidden bg-[#E3E0DA]"
         >
-          {/* Imagen de fondo vía next/image (optimizada y cacheada por Vercel) */}
+          {/* Imagen de fondo vía next/image (optimizada y cacheada por Vercel).
+              sizes mobile = 170vw: el hero es min-h-screen con object-cover, la foto horizontal se
+              dibuja más ancha que el viewport y con 100vw se veía borrosa (ver tienda-atelier). */}
           {(appearance as any)?.hero_image_url && (
             <Image
               src={(appearance as any).hero_image_url}
@@ -77,7 +79,7 @@ export default async function HomePage() {
               fill
               priority
               quality={90}
-              sizes="100vw"
+              sizes="(max-width: 768px) 170vw, 100vw"
               className="object-cover object-center"
             />
           )}
