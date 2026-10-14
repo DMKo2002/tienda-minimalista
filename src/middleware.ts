@@ -6,5 +6,5 @@ export { middleware } from '@creart/tienda-core/middleware'
 // recognize the exported `config` field... It mustn't be reexported").
 // Mantener este literal igual al de tienda-core/src/middleware.ts.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon\\.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|woff2?|ttf|otf|mp4|webm)$).*)'],
 }
