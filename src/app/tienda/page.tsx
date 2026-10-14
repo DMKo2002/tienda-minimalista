@@ -1,6 +1,9 @@
 import type { Metadata } from 'next'
-import { createServerSupabase, createServiceSupabase, TENANT_ID } from '@/lib/supabase-server'
+import { cookies } from 'next/headers'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServerSupabase, createServiceSupabase, createAnonSupabase, TENANT_ID } from '@/lib/supabase-server'
 import { getStoreData } from '@creart/tienda-core/store-data'
+import { cached } from '@creart/tienda-core/ttl-cache'
 import Navbar from '@/components/layout/Navbar'
 import MinOrderBanner from '@/components/layout/MinOrderBanner'
 import Footer from '@/components/layout/Footer'
@@ -26,15 +29,31 @@ export const metadata: Metadata = { title: 'Tienda', alternates: { canonical: '/
 export default async function TiendaPage({ searchParams: searchParamsPromise }: Props) {
   const searchParams = await searchParamsPromise
   const supabase = await createServerSupabase()
+  const tenantId = await TENANT_ID()
 
-  const { tenant, config } = await getStoreData(supabase, await TENANT_ID())
-  // Fetch all active categories (top-level + subcategories)
-  const { data: allCategories } = await supabase
-    .from('categories')
-    .select('id, name, slug, parent_id')
-    .eq('tenant_id', await TENANT_ID())
-    .eq('active', true)
-    .order('sort_order')
+  const cookieStore = await cookies()
+  const isLoggedIn = cookieStore.getAll().some(c => c.name.includes('-auth-token') && (c.value?.length ?? 0) > 10)
+
+  const { tenant, config } = await getStoreData(supabase, tenantId)
+  // Fetch all active categories (top-level + subcategories). Son publicas y
+  // iguales para todos: cache de 30s con cliente anon (incidente 2026-10-14,
+  // ver comentario en loadCatalog).
+  let allCategories: any[] = []
+  try {
+    allCategories = await cached(`tienda-categories:${tenantId}`, 30_000, async () => {
+      const { data, error } = await createAnonSupabase()
+        .from('categories')
+        .select('id, name, slug, parent_id')
+        .eq('tenant_id', tenantId)
+        .eq('active', true)
+        .order('sort_order')
+        .abortSignal(AbortSignal.timeout(5_000))
+      if (error) throw new Error(error.message)
+      return data ?? []
+    })
+  } catch (err) {
+    console.error('[TiendaPage] categorias fallaron y no hay cache:', err)
+  }
 
   // Build 3-level tree: category -> subcategory -> sub-subcategory
   const categories = (allCategories ?? [])
@@ -54,23 +73,45 @@ export default async function TiendaPage({ searchParams: searchParamsPromise }: 
   const precioMax = searchParams.precio_max ? Number(searchParams.precio_max) : undefined
   const soloDescuento = searchParams.descuento === '1'
 
-  // Fetch all active products — we'll sort/filter with JS for price and discount
-  let query = supabase
-    .from('products')
-    .select('id, name, slug, category_id, product_categories(category_id), product_images(*), variants(color, color_hex, size, price_rules(type, price, compare_at_price, active, min_qty))')
-    .eq('tenant_id', await TENANT_ID())
-    .eq('active', true)
+  // Fetch all active products — we'll sort/filter with JS for price and discount.
+  //
+  // Incidente 2026-10-14: esta consulta trae el catalogo COMPLETO con variantes
+  // y reglas de precio, y corria en cada visita a /tienda. Con trafico de
+  // campanas de Meta fue una de las que agoto el Disk IO de Supabase. Para
+  // visitantes sin sesion y sin busqueda (?q=) se cachea 30s en memoria con un
+  // cliente anon sin cookies (los filtros/orden se aplican en JS despues, asi
+  // que una sola copia sirve para todas las combinaciones). Con sesion o con
+  // busqueda sigue en vivo. Los cambios del panel tardan hasta 30s en verse.
+  const loadCatalog = async (client: SupabaseClient, q?: string) => {
+    let query = client
+      .from('products')
+      .select('id, name, slug, category_id, product_categories(category_id), product_images(*), variants(color, color_hex, size, price_rules(type, price, compare_at_price, active, min_qty))')
+      .eq('tenant_id', tenantId)
+      .eq('active', true)
 
-  // Filter by name/search
-  if (searchParams.q) {
-    query = query.ilike('name', `%${searchParams.q}%`)
+    // Filter by name/search
+    if (q) {
+      query = query.ilike('name', `%${q}%`)
+    }
+
+    // Orden por defecto: el manual del tenant (drag & drop en Panel Admin).
+    // Precio/nombre se re-ordena en JS más abajo si el cliente elige otro orden.
+    query = query.order('sort_order', { ascending: true }).order('created_at', { ascending: false })
+
+    const { data, error } = await query.abortSignal(AbortSignal.timeout(8_000))
+    if (error) throw new Error(error.message)
+    return (data ?? []) as any[]
   }
 
-  // Orden por defecto: el manual del tenant (drag & drop en Panel Admin).
-  // Precio/nombre se re-ordena en JS más abajo si el cliente elige otro orden.
-  query = query.order('sort_order', { ascending: true }).order('created_at', { ascending: false })
-
-  const { data: allProducts } = await query
+  let allProducts: any[] = []
+  try {
+    allProducts =
+      isLoggedIn || searchParams.q
+        ? await loadCatalog(supabase, searchParams.q)
+        : await cached(`tienda-catalog:${tenantId}`, 30_000, () => loadCatalog(createAnonSupabase()))
+  } catch (err) {
+    console.error('[TiendaPage] catalogo fallo y no hay cache:', err)
+  }
 
   // ── Post-fetch JS filtering ─────────────────────────────
 

@@ -1,7 +1,9 @@
 import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
-import { createServerSupabase, TENANT_ID } from '@/lib/supabase-server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServerSupabase, createAnonSupabase, TENANT_ID } from '@/lib/supabase-server'
 import { getStoreData } from '@creart/tienda-core/store-data'
+import { cached } from '@creart/tienda-core/ttl-cache'
 
 // Siempre SSR fresco — sin esto Next.js cachea la página y los cambios del panel no se ven
 export const dynamic = 'force-dynamic'
@@ -15,45 +17,92 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { ArrowRight } from 'lucide-react'
 
+// Datos propios de la home de ESTA plantilla (Minimalista); no viven en
+// tienda-core para que cada template quede intercambiable a futuro.
+//
+// Incidente 2026-10-14: la home hacia estas 3 consultas (en serie) por CADA
+// visita, sumadas a las del middleware y getStoreData, y con el trafico de
+// campanas de Meta la base agoto el Disk IO. Para visitantes SIN sesion (casi
+// todo el trafico) se cachean 30s en memoria con un cliente anon sin cookies;
+// quien tiene sesion sigue consultando en vivo con su propio cliente. Los
+// cambios del panel (hero, imagenes, destacados) tardan hasta 30s en verse.
+type HomeData = {
+  appearance: any
+  assetsRows: { slot: string; url: string }[]
+  products: any[]
+}
+
+const HOME_DB_TIMEOUT_MS = 5_000
+
+async function loadHomeData(client: SupabaseClient, tenantId: string): Promise<HomeData> {
+  // .limit(1) en vez de .single(): no explota si hay 0 o 2+ filas.
+  const [appearanceRes, assetsRes, productsRes] = await Promise.all([
+    client
+      .from('store_config')
+      .select('hero_image_url, hero_text_color, hero_eyebrow, hero_title_line1, hero_title_italic, hero_title_line3, hero_season, banner_bg_color')
+      .eq('tenant_id', tenantId)
+      .limit(1)
+      .abortSignal(AbortSignal.timeout(HOME_DB_TIMEOUT_MS)),
+    client
+      .from('store_assets')
+      .select('slot, url')
+      .eq('tenant_id', tenantId)
+      .abortSignal(AbortSignal.timeout(HOME_DB_TIMEOUT_MS)),
+    // Productos destacados (primeros 4 por orden manual)
+    client
+      .from('products')
+      .select('id, name, slug, product_images(*), variants(price_rules(*))')
+      .eq('tenant_id', tenantId)
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .limit(4)
+      .abortSignal(AbortSignal.timeout(HOME_DB_TIMEOUT_MS)),
+  ])
+
+  // Se lanza ante cualquier falla para que NO se cachee un resultado parcial.
+  const failed = [appearanceRes, assetsRes, productsRes].find((r) => r.error)
+  if (failed?.error) {
+    throw new Error(`home query failed: ${failed.error.message}`)
+  }
+
+  return {
+    appearance: appearanceRes.data?.[0] ?? null,
+    assetsRows: (assetsRes.data ?? []) as HomeData['assetsRows'],
+    products: (productsRes.data ?? []) as any[],
+  }
+}
+
+async function getHomeData(liveClient: SupabaseClient | null, tenantId: string): Promise<HomeData> {
+  try {
+    if (liveClient) return await loadHomeData(liveClient, tenantId)
+    return await cached(`home:${tenantId}`, 30_000, () =>
+      loadHomeData(createAnonSupabase(), tenantId)
+    )
+  } catch (err) {
+    console.error('[HomePage minimalista] consultas de la home fallaron:', err)
+    return { appearance: null, assetsRows: [], products: [] }
+  }
+}
+
 export default async function HomePage() {
   const cookieStore = await cookies()
   const isLoggedIn = cookieStore.getAll().some(c => c.name.includes('-auth-token') && (c.value?.length ?? 0) > 10)
 
   const supabase = await createServerSupabase()
+  const tenantId = await TENANT_ID()
 
   // Datos de la tienda
-  const { tenant, config } = await getStoreData(supabase, await TENANT_ID())
+  const { tenant, config } = await getStoreData(supabase, tenantId)
 
-  // Apariencia de ESTA plantilla (hero): propia de Minimalista, no vive en
-  // tienda-core — así cada template queda intercambiable a futuro.
-  // .limit(1) en vez de .single(): no explota si hay 0 o 2+ filas.
-  const { data: appearanceRows, error: appearanceError } = await supabase
-    .from('store_config')
-    .select('hero_image_url, hero_text_color, hero_eyebrow, hero_title_line1, hero_title_italic, hero_title_line3, hero_season, banner_bg_color')
-    .eq('tenant_id', await TENANT_ID())
-    .limit(1)
-  if (appearanceError) {
-    console.error('[HomePage minimalista] appearance query failed:', appearanceError.message)
-  }
-  const appearance = appearanceRows?.[0] ?? null
-
-  // Imágenes configurables desde panel Personalización
-  const { data: assetsRows } = await supabase
-    .from('store_assets')
-    .select('slot, url')
-    .eq('tenant_id', await TENANT_ID())
+  // Apariencia (hero), imágenes configurables desde el panel Personalización y
+  // productos destacados. Ver getHomeData: cacheado 30s para visitantes sin sesión.
+  const { appearance, assetsRows, products } = await getHomeData(
+    isLoggedIn ? supabase : null,
+    tenantId
+  )
 
   const asset = (slot: string): string | null =>
-    assetsRows?.find(a => a.slot === slot)?.url ?? null
-
-  // Productos destacados (últimos 4)
-  const { data: products } = await supabase
-    .from('products')
-    .select('id, name, slug, product_images(*), variants(price_rules(*))')
-    .eq('tenant_id', await TENANT_ID())
-    .eq('active', true)
-    .order('sort_order', { ascending: true })
-    .limit(4)
+    assetsRows?.find((a: { slot: string; url: string }) => a.slot === slot)?.url ?? null
 
   const storeName = tenant?.name ?? 'TIENDA'
   const priceVisibility = (config as any)?.price_visibility ?? 'all'
